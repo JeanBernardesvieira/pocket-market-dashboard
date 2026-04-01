@@ -1,9 +1,6 @@
-const http = require('http');
-const pool = require('./db');
+-- Pocket Market Dashboard
+-- Schema inicial para múltiplas lojas usando relatórios agregados de vendas
 
-const PORT = process.env.PORT || 3000;
-
-const initSql = `
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS stores (
@@ -90,82 +87,3 @@ CREATE INDEX IF NOT EXISTS idx_sales_aggregated_category_name ON sales_aggregate
 INSERT INTO stores (code, name)
 VALUES ('agulhas_negras', 'Agulhas Negras')
 ON CONFLICT (code) DO NOTHING;
-`;
-
-async function initializeDatabase() {
-  await pool.query(initSql);
-}
-
-async function fetchStats() {
-  const [storesRes, batchesRes, salesRes] = await Promise.all([
-    pool.query('SELECT COUNT(*)::int AS total FROM stores'),
-    pool.query('SELECT COUNT(*)::int AS total FROM import_batches'),
-    pool.query('SELECT COUNT(*)::int AS total FROM sales_aggregated')
-  ]);
-
-  return {
-    stores: storesRes.rows[0].total,
-    batches: batchesRes.rows[0].total,
-    sales: salesRes.rows[0].total
-  };
-}
-
-const server = http.createServer(async (req, res) => {
-  try {
-    const stats = await fetchStats();
-
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(`
-      <html>
-        <head>
-          <title>Pocket Market Dashboard</title>
-          <style>
-            body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; padding: 32px; }
-            .card { background: #1e293b; border-radius: 16px; padding: 24px; max-width: 900px; margin: 0 auto; }
-            .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 24px; }
-            .box { background: #334155; border-radius: 12px; padding: 20px; }
-            .label { font-size: 14px; color: #94a3b8; }
-            .value { font-size: 32px; font-weight: bold; margin-top: 8px; }
-            h1 { margin-top: 0; }
-            p { color: #cbd5e1; }
-          </style>
-        </head>
-        <body>
-          <div class="card">
-            <h1>Pocket Market Dashboard</h1>
-            <p>Sistema online e conectado ao banco.</p>
-            <p>Loja inicial cadastrada: <strong>agulhas_negras</strong></p>
-            <div class="grid">
-              <div class="box">
-                <div class="label">Lojas cadastradas</div>
-                <div class="value">${stats.stores}</div>
-              </div>
-              <div class="box">
-                <div class="label">Lotes de importação</div>
-                <div class="value">${stats.batches}</div>
-              </div>
-              <div class="box">
-                <div class="label">Linhas de vendas</div>
-                <div class="value">${stats.sales}</div>
-              </div>
-            </div>
-          </div>
-        </body>
-      </html>
-    `);
-  } catch (error) {
-    res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(`Erro ao carregar dashboard: ${error.message}`);
-  }
-});
-
-initializeDatabase()
-  .then(() => {
-    server.listen(PORT, () => {
-      console.log(`Servidor rodando na porta ${PORT}`);
-    });
-  })
-  .catch((error) => {
-    console.error('Erro ao inicializar banco:', error);
-    process.exit(1);
-  });
