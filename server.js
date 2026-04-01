@@ -1,7 +1,10 @@
 const http = require('http');
 const pool = require('./db');
+const { importSalesFromUrl } = require('./importer');
 
 const PORT = process.env.PORT || 3000;
+const STORE_CODE = process.env.STORE_CODE || 'agulhas_negras';
+const IMPORT_FILE_URL = process.env.IMPORT_FILE_URL || '';
 
 const initSql = `
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -92,67 +95,159 @@ VALUES ('agulhas_negras', 'Agulhas Negras')
 ON CONFLICT (code) DO NOTHING;
 `;
 
+function formatCurrency(value) {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value || 0));
+}
+
+function formatNumber(value) {
+  return new Intl.NumberFormat('pt-BR').format(Number(value || 0));
+}
+
 async function initializeDatabase() {
   await pool.query(initSql);
 }
 
 async function fetchStats() {
-  const [storesRes, batchesRes, salesRes] = await Promise.all([
+  const [storesRes, batchesRes, salesRes, totalsRes, topProductsRes] = await Promise.all([
     pool.query('SELECT COUNT(*)::int AS total FROM stores'),
     pool.query('SELECT COUNT(*)::int AS total FROM import_batches'),
-    pool.query('SELECT COUNT(*)::int AS total FROM sales_aggregated')
+    pool.query('SELECT COUNT(*)::int AS total FROM sales_aggregated'),
+    pool.query(`
+      SELECT
+        COALESCE(SUM(quantity), 0) AS total_quantity,
+        COALESCE(SUM(gross_value), 0) AS total_value
+      FROM sales_aggregated
+    `),
+    pool.query(`
+      SELECT product_name, SUM(gross_value) AS total_value
+      FROM sales_aggregated
+      GROUP BY product_name
+      ORDER BY total_value DESC
+      LIMIT 5
+    `)
   ]);
 
   return {
     stores: storesRes.rows[0].total,
     batches: batchesRes.rows[0].total,
-    sales: salesRes.rows[0].total
+    sales: salesRes.rows[0].total,
+    totalQuantity: Number(totalsRes.rows[0].total_quantity || 0),
+    totalValue: Number(totalsRes.rows[0].total_value || 0),
+    topProducts: topProductsRes.rows.map((row) => ({
+      product_name: row.product_name,
+      total_value: Number(row.total_value || 0)
+    }))
   };
+}
+
+function renderHome(stats, message = '') {
+  const topProductsHtml = stats.topProducts.length
+    ? stats.topProducts
+        .map(
+          (item) => `
+            <tr>
+              <td>${item.product_name}</td>
+              <td style="text-align:right">${formatCurrency(item.total_value)}</td>
+            </tr>
+          `
+        )
+        .join('')
+    : '<tr><td colspan="2">Nenhum dado importado ainda.</td></tr>';
+
+  const importButton = IMPORT_FILE_URL
+    ? '<a class="button" href="/import-current">Importar planilha atual</a>'
+    : '<span class="button disabled">Configure IMPORT_FILE_URL para importar</span>';
+
+  return `
+    <html>
+      <head>
+        <title>Pocket Market Dashboard</title>
+        <meta charset="utf-8" />
+        <style>
+          body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; padding: 32px; }
+          .card { background: #1e293b; border-radius: 16px; padding: 24px; max-width: 1100px; margin: 0 auto; }
+          .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-top: 24px; }
+          .box { background: #334155; border-radius: 12px; padding: 20px; }
+          .label { font-size: 14px; color: #94a3b8; }
+          .value { font-size: 30px; font-weight: bold; margin-top: 8px; }
+          h1, h2 { margin-top: 0; }
+          p { color: #cbd5e1; }
+          .actions { margin: 20px 0 8px; display: flex; gap: 12px; align-items: center; }
+          .button { background: #7c3aed; color: white; padding: 12px 16px; border-radius: 10px; text-decoration: none; font-weight: bold; display: inline-block; }
+          .button.disabled { background: #475569; color: #cbd5e1; }
+          .message { background: #0f766e; color: white; padding: 12px 16px; border-radius: 10px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+          th, td { padding: 12px; border-bottom: 1px solid #334155; }
+          th { text-align: left; color: #94a3b8; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>Pocket Market Dashboard</h1>
+          <p>Sistema online e conectado ao banco.</p>
+          <p>Loja inicial cadastrada: <strong>${STORE_CODE}</strong></p>
+          <div class="actions">
+            ${importButton}
+            ${message ? `<div class="message">${message}</div>` : ''}
+          </div>
+          <div class="grid">
+            <div class="box"><div class="label">Lojas cadastradas</div><div class="value">${formatNumber(stats.stores)}</div></div>
+            <div class="box"><div class="label">Lotes de importação</div><div class="value">${formatNumber(stats.batches)}</div></div>
+            <div class="box"><div class="label">Linhas de vendas</div><div class="value">${formatNumber(stats.sales)}</div></div>
+            <div class="box"><div class="label">Quantidade total</div><div class="value">${formatNumber(stats.totalQuantity)}</div></div>
+            <div class="box"><div class="label">Faturamento total</div><div class="value">${formatCurrency(stats.totalValue)}</div></div>
+          </div>
+
+          <div style="margin-top: 32px;">
+            <h2>Top 5 produtos por faturamento</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>Produto</th>
+                  <th style="text-align:right">Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${topProductsHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
 }
 
 const server = http.createServer(async (req, res) => {
   try {
-    const stats = await fetchStats();
+    const url = new URL(req.url, `http://${req.headers.host}`);
 
+    if (url.pathname === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    if (url.pathname === '/import-current') {
+      const result = await importSalesFromUrl({
+        pool,
+        storeCode: STORE_CODE,
+        fileUrl: IMPORT_FILE_URL
+      });
+
+      const message = result.alreadyImported
+        ? 'A planilha atual já havia sido importada anteriormente.'
+        : `Importação concluída com sucesso. ${result.importedRows} linhas importadas.`;
+
+      res.writeHead(302, { Location: `/?message=${encodeURIComponent(message)}` });
+      res.end();
+      return;
+    }
+
+    const stats = await fetchStats();
+    const message = url.searchParams.get('message') || '';
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(`
-      <html>
-        <head>
-          <title>Pocket Market Dashboard</title>
-          <style>
-            body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; padding: 32px; }
-            .card { background: #1e293b; border-radius: 16px; padding: 24px; max-width: 900px; margin: 0 auto; }
-            .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 24px; }
-            .box { background: #334155; border-radius: 12px; padding: 20px; }
-            .label { font-size: 14px; color: #94a3b8; }
-            .value { font-size: 32px; font-weight: bold; margin-top: 8px; }
-            h1 { margin-top: 0; }
-            p { color: #cbd5e1; }
-          </style>
-        </head>
-        <body>
-          <div class="card">
-            <h1>Pocket Market Dashboard</h1>
-            <p>Sistema online e conectado ao banco.</p>
-            <p>Loja inicial cadastrada: <strong>agulhas_negras</strong></p>
-            <div class="grid">
-              <div class="box">
-                <div class="label">Lojas cadastradas</div>
-                <div class="value">${stats.stores}</div>
-              </div>
-              <div class="box">
-                <div class="label">Lotes de importação</div>
-                <div class="value">${stats.batches}</div>
-              </div>
-              <div class="box">
-                <div class="label">Linhas de vendas</div>
-                <div class="value">${stats.sales}</div>
-              </div>
-            </div>
-          </div>
-        </body>
-      </html>
-    `);
+    res.end(renderHome(stats, message));
   } catch (error) {
     res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(`Erro ao carregar dashboard: ${error.message}`);
