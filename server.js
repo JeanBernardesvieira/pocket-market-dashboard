@@ -389,6 +389,44 @@ function renderOption(value, currentValue) {
   return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(value)}</option>`;
 }
 
+function renderHorizontalBarChart({ title, items, labelKey, valueKey, formatter, emptyMessage, colorClass = '' }) {
+  if (!items.length) {
+    return `
+      <div class="box chart-box ${colorClass}">
+        <h2 style="font-size:22px;">${escapeHtml(title)}</h2>
+        <p>${escapeHtml(emptyMessage)}</p>
+      </div>
+    `;
+  }
+
+  const maxValue = Math.max(...items.map((item) => Number(item[valueKey] || 0)), 0);
+
+  const rowsHtml = items
+    .map((item) => {
+      const rawValue = Number(item[valueKey] || 0);
+      const width = maxValue > 0 ? Math.max((rawValue / maxValue) * 100, 6) : 0;
+      return `
+        <div class="chart-row">
+          <div class="chart-row-head">
+            <span class="chart-label">${escapeHtml(item[labelKey] || '-')}</span>
+            <strong class="chart-value">${formatter(rawValue)}</strong>
+          </div>
+          <div class="chart-track">
+            <div class="chart-fill" style="width:${width.toFixed(2)}%"></div>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  return `
+    <div class="box chart-box ${colorClass}">
+      <h2 style="font-size:22px;">${escapeHtml(title)}</h2>
+      <div class="chart-list">${rowsHtml}</div>
+    </div>
+  `;
+}
+
 function renderHome(stats, filters, filterOptions, message = '') {
   const topProductsHtml = stats.topProducts.length
     ? stats.topProducts
@@ -480,6 +518,26 @@ function renderHome(stats, filters, filterOptions, message = '') {
     `
     : '';
 
+  const topProductsChartHtml = renderHorizontalBarChart({
+    title: 'Gráfico de vendas por produto',
+    items: stats.topProducts,
+    labelKey: 'product_name',
+    valueKey: 'total_value',
+    formatter: formatCurrency,
+    emptyMessage: 'Sem dados de produtos para exibir.',
+    colorClass: 'chart-purple'
+  });
+
+  const categoriesChartHtml = renderHorizontalBarChart({
+    title: 'Gráfico de vendas por categoria',
+    items: stats.categories.slice(0, 8),
+    labelKey: 'category_name',
+    valueKey: 'total_value',
+    formatter: formatCurrency,
+    emptyMessage: 'Sem dados de categorias para exibir.',
+    colorClass: 'chart-cyan'
+  });
+
   const filterSummary = [
     filters.product ? `Produto: ${escapeHtml(filters.product)}` : '',
     filters.category ? `Categoria: ${escapeHtml(filters.category)}` : '',
@@ -504,6 +562,7 @@ function renderHome(stats, filters, filterOptions, message = '') {
           .card { background: #1e293b; border-radius: 16px; padding: 24px; max-width: 1300px; margin: 0 auto; }
           .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-top: 24px; }
           .grid.grid-3 { grid-template-columns: repeat(3, 1fr); }
+          .grid.grid-2 { grid-template-columns: repeat(2, 1fr); }
           .grid.filters-grid { grid-template-columns: repeat(6, 1fr); align-items: end; }
           .box { background: #334155; border-radius: 12px; padding: 20px; }
           .label { font-size: 14px; color: #94a3b8; }
@@ -523,16 +582,25 @@ function renderHome(stats, filters, filterOptions, message = '') {
           .filter-field select, .filter-field input { background: #0f172a; color: #e2e8f0; border: 1px solid #475569; border-radius: 10px; padding: 10px 12px; }
           .filter-actions { display: flex; gap: 12px; align-items: center; }
           .summary-chip { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #0f172a; color: #cbd5e1; font-size: 14px; }
+          .chart-box { min-height: 320px; }
+          .chart-list { display: flex; flex-direction: column; gap: 14px; margin-top: 18px; }
+          .chart-row { display: flex; flex-direction: column; gap: 8px; }
+          .chart-row-head { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; }
+          .chart-label { color: #e2e8f0; font-size: 14px; line-height: 1.3; }
+          .chart-value { color: #f8fafc; font-size: 14px; white-space: nowrap; }
+          .chart-track { width: 100%; height: 14px; background: #0f172a; border-radius: 999px; overflow: hidden; border: 1px solid #475569; }
+          .chart-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #8b5cf6, #c084fc); }
+          .chart-cyan .chart-fill { background: linear-gradient(90deg, #06b6d4, #67e8f9); }
           table { width: 100%; border-collapse: collapse; margin-top: 16px; }
           th, td { padding: 12px; border-bottom: 1px solid #334155; font-size: 14px; }
           th { text-align: left; color: #94a3b8; position: sticky; top: 0; background: #1e293b; }
           .table-wrap { overflow-x: auto; }
           @media (max-width: 1100px) {
-            .grid, .grid.grid-3, .grid.filters-grid { grid-template-columns: repeat(2, 1fr); }
+            .grid, .grid.grid-2, .grid.grid-3, .grid.filters-grid { grid-template-columns: repeat(2, 1fr); }
           }
           @media (max-width: 700px) {
             body { padding: 16px; }
-            .grid, .grid.grid-3, .grid.filters-grid { grid-template-columns: 1fr; }
+            .grid, .grid.grid-2, .grid.grid-3, .grid.filters-grid { grid-template-columns: 1fr; }
             .filter-actions { flex-direction: column; align-items: stretch; }
           }
         </style>
@@ -606,6 +674,11 @@ function renderHome(stats, filters, filterOptions, message = '') {
           </div>
 
           ${batchSummaryHtml}
+
+          <div class="grid grid-2" style="margin-top: 32px; align-items:start;">
+            ${topProductsChartHtml}
+            ${categoriesChartHtml}
+          </div>
 
           <div style="margin-top: 32px;">
             <h2>Top 5 produtos por faturamento</h2>
