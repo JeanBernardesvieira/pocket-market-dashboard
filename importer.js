@@ -11,10 +11,14 @@ function parseBrazilianNumber(value) {
   const text = String(value).trim();
   if (!text) return null;
 
-  const normalized = text
-    .replace(/\./g, '')
-    .replace(/,/g, '.')
-    .replace(/[^0-9.-]/g, '');
+  const cleaned = text.replace(/[^0-9,.-]/g, '');
+  let normalized = cleaned;
+
+  if (cleaned.includes('.') && cleaned.includes(',')) {
+    normalized = cleaned.replace(/\./g, '').replace(/,/g, '.');
+  } else if (cleaned.includes(',')) {
+    normalized = cleaned.replace(/,/g, '.');
+  }
 
   const result = Number(normalized);
   return Number.isFinite(result) ? result : null;
