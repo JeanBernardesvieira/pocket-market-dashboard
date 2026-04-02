@@ -126,7 +126,7 @@ async function resetStoreData() {
 }
 
 async function fetchStats() {
-  const [storesRes, batchesRes, salesRes, totalsRes, topProductsRes, latestBatchRes, detailedRowsRes] = await Promise.all([
+  const [storesRes, batchesRes, salesRes, totalsRes, topProductsRes, latestBatchRes, detailedRowsRes, categoryRes, manufacturerRes, hourRes] = await Promise.all([
     pool.query('SELECT COUNT(*)::int AS total FROM stores'),
     pool.query('SELECT COUNT(*)::int AS total FROM import_batches'),
     pool.query('SELECT COUNT(*)::int AS total FROM sales_aggregated'),
@@ -156,6 +156,32 @@ async function fetchStats() {
       FROM sales_aggregated
       ORDER BY sale_day DESC NULLS LAST, sale_hour DESC NULLS LAST, product_name ASC
       LIMIT 70
+    `),
+    pool.query(`
+      SELECT COALESCE(category_name, 'Sem categoria') AS category_name,
+             SUM(quantity) AS total_quantity,
+             SUM(gross_value) AS total_value
+      FROM sales_aggregated
+      GROUP BY COALESCE(category_name, 'Sem categoria')
+      ORDER BY total_value DESC
+      LIMIT 10
+    `),
+    pool.query(`
+      SELECT COALESCE(manufacturer, 'Sem fabricante') AS manufacturer,
+             SUM(quantity) AS total_quantity,
+             SUM(gross_value) AS total_value
+      FROM sales_aggregated
+      GROUP BY COALESCE(manufacturer, 'Sem fabricante')
+      ORDER BY total_value DESC
+      LIMIT 10
+    `),
+    pool.query(`
+      SELECT sale_hour,
+             SUM(quantity) AS total_quantity,
+             SUM(gross_value) AS total_value
+      FROM sales_aggregated
+      GROUP BY sale_hour
+      ORDER BY sale_hour ASC NULLS LAST
     `)
   ]);
 
@@ -192,6 +218,21 @@ async function fetchStats() {
       channel_slot: row.channel_slot,
       quantity: Number(row.quantity || 0),
       gross_value: Number(row.gross_value || 0)
+    })),
+    categories: categoryRes.rows.map((row) => ({
+      category_name: row.category_name,
+      total_quantity: Number(row.total_quantity || 0),
+      total_value: Number(row.total_value || 0)
+    })),
+    manufacturers: manufacturerRes.rows.map((row) => ({
+      manufacturer: row.manufacturer,
+      total_quantity: Number(row.total_quantity || 0),
+      total_value: Number(row.total_value || 0)
+    })),
+    hours: hourRes.rows.map((row) => ({
+      sale_hour: row.sale_hour,
+      total_quantity: Number(row.total_quantity || 0),
+      total_value: Number(row.total_value || 0)
     }))
   };
 }
@@ -234,6 +275,48 @@ function renderHome(stats, message = '') {
         )
         .join('')
     : '<tr><td colspan="14">Nenhuma linha detalhada disponível.</td></tr>';
+
+  const categoryRowsHtml = stats.categories.length
+    ? stats.categories
+        .map(
+          (item) => `
+            <tr>
+              <td>${item.category_name}</td>
+              <td style="text-align:right">${formatNumber(item.total_quantity)}</td>
+              <td style="text-align:right">${formatCurrency(item.total_value)}</td>
+            </tr>
+          `
+        )
+        .join('')
+    : '<tr><td colspan="3">Sem dados por categoria.</td></tr>';
+
+  const manufacturerRowsHtml = stats.manufacturers.length
+    ? stats.manufacturers
+        .map(
+          (item) => `
+            <tr>
+              <td>${item.manufacturer}</td>
+              <td style="text-align:right">${formatNumber(item.total_quantity)}</td>
+              <td style="text-align:right">${formatCurrency(item.total_value)}</td>
+            </tr>
+          `
+        )
+        .join('')
+    : '<tr><td colspan="3">Sem dados por fabricante.</td></tr>';
+
+  const hourRowsHtml = stats.hours.length
+    ? stats.hours
+        .map(
+          (item) => `
+            <tr>
+              <td>${item.sale_hour ?? '-'}</td>
+              <td style="text-align:right">${formatNumber(item.total_quantity)}</td>
+              <td style="text-align:right">${formatCurrency(item.total_value)}</td>
+            </tr>
+          `
+        )
+        .join('')
+    : '<tr><td colspan="3">Sem dados por hora.</td></tr>';
 
   const batchSummaryHtml = stats.latestBatch
     ? `
@@ -310,6 +393,54 @@ function renderHome(stats, message = '') {
                 ${topProductsHtml}
               </tbody>
             </table>
+          </div>
+
+          <div class="grid grid-3" style="margin-top: 32px; align-items:start;">
+            <div class="box">
+              <h2 style="font-size:22px;">Categorias</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Categoria</th>
+                    <th style="text-align:right">Qtd.</th>
+                    <th style="text-align:right">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${categoryRowsHtml}
+                </tbody>
+              </table>
+            </div>
+            <div class="box">
+              <h2 style="font-size:22px;">Fabricantes</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fabricante</th>
+                    <th style="text-align:right">Qtd.</th>
+                    <th style="text-align:right">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${manufacturerRowsHtml}
+                </tbody>
+              </table>
+            </div>
+            <div class="box">
+              <h2 style="font-size:22px;">Vendas por hora</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Hora</th>
+                    <th style="text-align:right">Qtd.</th>
+                    <th style="text-align:right">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${hourRowsHtml}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div style="margin-top: 32px;">
