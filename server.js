@@ -103,6 +103,13 @@ function formatNumber(value) {
   return new Intl.NumberFormat('pt-BR').format(Number(value || 0));
 }
 
+function formatDate(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat('pt-BR', { timeZone: 'UTC' }).format(date);
+}
+
 async function initializeDatabase() {
   await pool.query(initSql);
 }
@@ -119,7 +126,7 @@ async function resetStoreData() {
 }
 
 async function fetchStats() {
-  const [storesRes, batchesRes, salesRes, totalsRes, topProductsRes] = await Promise.all([
+  const [storesRes, batchesRes, salesRes, totalsRes, topProductsRes, latestBatchRes, detailedRowsRes] = await Promise.all([
     pool.query('SELECT COUNT(*)::int AS total FROM stores'),
     pool.query('SELECT COUNT(*)::int AS total FROM import_batches'),
     pool.query('SELECT COUNT(*)::int AS total FROM sales_aggregated'),
@@ -135,6 +142,20 @@ async function fetchStats() {
       GROUP BY product_name
       ORDER BY total_value DESC
       LIMIT 5
+    `),
+    pool.query(`
+      SELECT report_name, report_period_start, report_period_end, source_file_name, raw_total_quantity, raw_total_value
+      FROM import_batches
+      ORDER BY created_at DESC
+      LIMIT 1
+    `),
+    pool.query(`
+      SELECT sale_day, sale_hour, product_name, category_name, client_name, location_name,
+             internal_location, machine_name, machine_type, manufacturer, product_code,
+             channel_slot, quantity, gross_value
+      FROM sales_aggregated
+      ORDER BY sale_day DESC NULLS LAST, sale_hour DESC NULLS LAST, product_name ASC
+      LIMIT 70
     `)
   ]);
 
@@ -147,6 +168,30 @@ async function fetchStats() {
     topProducts: topProductsRes.rows.map((row) => ({
       product_name: row.product_name,
       total_value: Number(row.total_value || 0)
+    })),
+    latestBatch: latestBatchRes.rowCount > 0 ? {
+      report_name: latestBatchRes.rows[0].report_name,
+      report_period_start: latestBatchRes.rows[0].report_period_start,
+      report_period_end: latestBatchRes.rows[0].report_period_end,
+      source_file_name: latestBatchRes.rows[0].source_file_name,
+      raw_total_quantity: Number(latestBatchRes.rows[0].raw_total_quantity || 0),
+      raw_total_value: Number(latestBatchRes.rows[0].raw_total_value || 0)
+    } : null,
+    detailedRows: detailedRowsRes.rows.map((row) => ({
+      sale_day: row.sale_day,
+      sale_hour: row.sale_hour,
+      product_name: row.product_name,
+      category_name: row.category_name,
+      client_name: row.client_name,
+      location_name: row.location_name,
+      internal_location: row.internal_location,
+      machine_name: row.machine_name,
+      machine_type: row.machine_type,
+      manufacturer: row.manufacturer,
+      product_code: row.product_code,
+      channel_slot: row.channel_slot,
+      quantity: Number(row.quantity || 0),
+      gross_value: Number(row.gross_value || 0)
     }))
   };
 }
@@ -165,6 +210,41 @@ function renderHome(stats, message = '') {
         .join('')
     : '<tr><td colspan="2">Nenhum dado importado ainda.</td></tr>';
 
+  const detailedRowsHtml = stats.detailedRows.length
+    ? stats.detailedRows
+        .map(
+          (item) => `
+            <tr>
+              <td>${formatDate(item.sale_day)}</td>
+              <td>${item.sale_hour ?? '-'}</td>
+              <td>${item.product_name || '-'}</td>
+              <td>${item.category_name || '-'}</td>
+              <td>${item.client_name || '-'}</td>
+              <td>${item.location_name || '-'}</td>
+              <td>${item.internal_location || '-'}</td>
+              <td>${item.machine_name || '-'}</td>
+              <td>${item.machine_type || '-'}</td>
+              <td>${item.manufacturer || '-'}</td>
+              <td>${item.product_code || '-'}</td>
+              <td>${item.channel_slot || '-'}</td>
+              <td style="text-align:right">${formatNumber(item.quantity)}</td>
+              <td style="text-align:right">${formatCurrency(item.gross_value)}</td>
+            </tr>
+          `
+        )
+        .join('')
+    : '<tr><td colspan="14">Nenhuma linha detalhada disponível.</td></tr>';
+
+  const batchSummaryHtml = stats.latestBatch
+    ? `
+      <div class="grid grid-3" style="margin-top: 24px;">
+        <div class="box"><div class="label">Relatório</div><div class="mini-value">${stats.latestBatch.report_name || '-'}</div></div>
+        <div class="box"><div class="label">Período</div><div class="mini-value">${formatDate(stats.latestBatch.report_period_start)} até ${formatDate(stats.latestBatch.report_period_end)}</div></div>
+        <div class="box"><div class="label">Arquivo</div><div class="mini-value">${stats.latestBatch.source_file_name || '-'}</div></div>
+      </div>
+    `
+    : '';
+
   const importButton = IMPORT_FILE_URL
     ? '<a class="button" href="/import-current">Importar planilha atual</a>'
     : '<span class="button disabled">Configure IMPORT_FILE_URL para importar</span>';
@@ -179,9 +259,11 @@ function renderHome(stats, message = '') {
           body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; padding: 32px; }
           .card { background: #1e293b; border-radius: 16px; padding: 24px; max-width: 1100px; margin: 0 auto; }
           .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-top: 24px; }
+          .grid.grid-3 { grid-template-columns: repeat(3, 1fr); }
           .box { background: #334155; border-radius: 12px; padding: 20px; }
           .label { font-size: 14px; color: #94a3b8; }
           .value { font-size: 30px; font-weight: bold; margin-top: 8px; }
+          .mini-value { font-size: 16px; font-weight: bold; margin-top: 8px; line-height: 1.4; }
           h1, h2 { margin-top: 0; }
           p { color: #cbd5e1; }
           .actions { margin: 20px 0 8px; display: flex; gap: 12px; align-items: center; }
@@ -190,8 +272,9 @@ function renderHome(stats, message = '') {
           .button.disabled { background: #475569; color: #cbd5e1; }
           .message { background: #0f766e; color: white; padding: 12px 16px; border-radius: 10px; }
           table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-          th, td { padding: 12px; border-bottom: 1px solid #334155; }
-          th { text-align: left; color: #94a3b8; }
+          th, td { padding: 12px; border-bottom: 1px solid #334155; font-size: 14px; }
+          th { text-align: left; color: #94a3b8; position: sticky; top: 0; background: #1e293b; }
+          .table-wrap { overflow-x: auto; }
         </style>
       </head>
       <body>
@@ -212,6 +295,8 @@ function renderHome(stats, message = '') {
             <div class="box"><div class="label">Faturamento total</div><div class="value">${formatCurrency(stats.totalValue)}</div></div>
           </div>
 
+          ${batchSummaryHtml}
+
           <div style="margin-top: 32px;">
             <h2>Top 5 produtos por faturamento</h2>
             <table>
@@ -225,6 +310,35 @@ function renderHome(stats, message = '') {
                 ${topProductsHtml}
               </tbody>
             </table>
+          </div>
+
+          <div style="margin-top: 32px;">
+            <h2>Detalhamento das linhas importadas</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Dia</th>
+                    <th>Hora</th>
+                    <th>Produto</th>
+                    <th>Categoria</th>
+                    <th>Cliente</th>
+                    <th>Local</th>
+                    <th>Local interno</th>
+                    <th>Máquina</th>
+                    <th>Tipo máquina</th>
+                    <th>Fabricante</th>
+                    <th>Cód. produto</th>
+                    <th>Canaleta</th>
+                    <th style="text-align:right">Qtd.</th>
+                    <th style="text-align:right">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${detailedRowsHtml}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </body>
