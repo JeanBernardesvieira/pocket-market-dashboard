@@ -107,6 +107,17 @@ async function initializeDatabase() {
   await pool.query(initSql);
 }
 
+async function resetStoreData() {
+  await pool.query(
+    `DELETE FROM sales_aggregated WHERE store_id = (SELECT id FROM stores WHERE code = $1)`,
+    [STORE_CODE]
+  );
+  await pool.query(
+    `DELETE FROM import_batches WHERE store_id = (SELECT id FROM stores WHERE code = $1)`,
+    [STORE_CODE]
+  );
+}
+
 async function fetchStats() {
   const [storesRes, batchesRes, salesRes, totalsRes, topProductsRes] = await Promise.all([
     pool.query('SELECT COUNT(*)::int AS total FROM stores'),
@@ -157,6 +168,7 @@ function renderHome(stats, message = '') {
   const importButton = IMPORT_FILE_URL
     ? '<a class="button" href="/import-current">Importar planilha atual</a>'
     : '<span class="button disabled">Configure IMPORT_FILE_URL para importar</span>';
+  const resetButton = '<a class="button button-secondary" href="/reset-store-data">Limpar importação atual</a>';
 
   return `
     <html>
@@ -174,6 +186,7 @@ function renderHome(stats, message = '') {
           p { color: #cbd5e1; }
           .actions { margin: 20px 0 8px; display: flex; gap: 12px; align-items: center; }
           .button { background: #7c3aed; color: white; padding: 12px 16px; border-radius: 10px; text-decoration: none; font-weight: bold; display: inline-block; }
+          .button.button-secondary { background: #b91c1c; }
           .button.disabled { background: #475569; color: #cbd5e1; }
           .message { background: #0f766e; color: white; padding: 12px 16px; border-radius: 10px; }
           table { width: 100%; border-collapse: collapse; margin-top: 16px; }
@@ -188,6 +201,7 @@ function renderHome(stats, message = '') {
           <p>Loja inicial cadastrada: <strong>${STORE_CODE}</strong></p>
           <div class="actions">
             ${importButton}
+            ${resetButton}
             ${message ? `<div class="message">${message}</div>` : ''}
           </div>
           <div class="grid">
@@ -240,6 +254,13 @@ const server = http.createServer(async (req, res) => {
         : `Importação concluída com sucesso. ${result.importedRows} linhas importadas.`;
 
       res.writeHead(302, { Location: `/?message=${encodeURIComponent(message)}` });
+      res.end();
+      return;
+    }
+
+    if (url.pathname === '/reset-store-data') {
+      await resetStoreData();
+      res.writeHead(302, { Location: `/?message=${encodeURIComponent('Importação antiga removida com sucesso.')}` });
       res.end();
       return;
     }
