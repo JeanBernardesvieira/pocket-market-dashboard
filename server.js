@@ -4,7 +4,7 @@ const { importSalesFromUrl } = require('./importer');
 
 const PORT = process.env.PORT || 3000;
 const STORE_CODE = process.env.STORE_CODE || 'agulhas_negras';
-const IMPORT_FILE_URL = process.env.IMPORT_FILE_URL || '';
+const IMPORT_FILE_URL = process.env.IMPORT_FILE_URL || 'https://docs.google.com/spreadsheets/d/1v0km7F5QSUKuRI_wY2X55_92iv--ufdN/export?format=xlsx';
 
 const initSql = `
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
